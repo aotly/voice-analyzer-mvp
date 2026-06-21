@@ -231,6 +231,114 @@ def grade(value: int, labels: tuple[str, str, str, str, str]) -> str:
     return labels[4]
 
 
+def _quality_label(score: int) -> str:
+    if score >= 85:
+        return "\u4f18\u79c0"
+    if score >= 70:
+        return "\u826f\u597d"
+    if score >= 50:
+        return "\u53ef\u7528"
+    return "\u9700\u6539\u5584"
+
+
+def assess_recording_quality(
+    samples: Iterable[float | int],
+    sample_rate_hz: float | int | None,
+    duration_sec: float | int | None,
+    hnr_db: float | int | None,
+    voiced_frames: int,
+    total_frames: int,
+) -> dict:
+    clean = []
+    for sample in samples:
+        try:
+            value = float(sample)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value):
+            clean.append(value)
+
+    sample_rate = int(round(float(sample_rate_hz or 0)))
+    duration = round(float(duration_sec or 0), 2)
+    abs_samples = [abs(value) for value in clean]
+    peak = max(abs_samples) if abs_samples else 0.0
+    rms = math.sqrt(sum(value * value for value in clean) / len(clean)) if clean else 0.0
+    rms_dbfs = round(20 * math.log10(max(rms, 1e-9)), 1)
+    clipping_percent = round(sum(1 for value in abs_samples if value >= 0.98) / max(1, len(abs_samples)) * 100, 2)
+    silence_percent = round(sum(1 for value in abs_samples if value < 0.01) / max(1, len(abs_samples)) * 100, 1)
+    voiced_ratio = round(voiced_frames / max(1, total_frames), 2)
+    hnr = float(hnr_db) if hnr_db is not None and math.isfinite(float(hnr_db)) else None
+
+    duration_score = _score(duration, 3, 12)
+    if duration > 35:
+        duration_score = min(duration_score, 82)
+    voice_score = _score(voiced_ratio, 0.25, 0.7)
+    hnr_score = _score(hnr or 0, 8, 24)
+    clipping_score = _inverse_score(clipping_percent, 0.05, 2.0)
+    silence_score = _inverse_score(silence_percent, 35, 85)
+    level_score = 100 if -30 <= rms_dbfs <= -12 else 72 if -38 <= rms_dbfs <= -8 else 45
+    sample_rate_score = 100 if sample_rate >= 44100 else 88 if sample_rate >= 24000 else 72 if sample_rate >= 16000 else 42
+
+    recording_score = _clamp(
+        _mix(
+            (duration_score, 0.22),
+            (voice_score, 0.23),
+            (hnr_score, 0.22),
+            (clipping_score, 0.18),
+            (silence_score, 0.08),
+            (level_score, 0.07),
+        )
+    )
+    device_score = _clamp(
+        _mix(
+            (sample_rate_score, 0.36),
+            (clipping_score, 0.26),
+            (hnr_score, 0.22),
+            (level_score, 0.16),
+        )
+    )
+
+    issues = []
+    tips = []
+    if duration < 6:
+        issues.append("\u5f55\u97f3\u504f\u77ed\uff0c\u58f0\u7ebf\u7a33\u5b9a\u5ea6\u5224\u65ad\u4f1a\u53d8\u5f31")
+        tips.append("\u5efa\u8bae\u5f55 10-30 \u79d2\uff0c\u6b63\u5e38\u8bf4\u8bdd\u6216\u6717\u8bfb\u540c\u4e00\u6bb5\u6587\u5b57")
+    if sample_rate and sample_rate < 16000:
+        issues.append("\u91c7\u6837\u7387\u504f\u4f4e\uff0c\u9ad8\u9891\u7ec6\u8282\u4e0d\u8db3")
+        tips.append(f"\u5f53\u524d\u7ea6 {sample_rate // 1000} kHz\uff0c\u5efa\u8bae\u4f7f\u7528 16 kHz \u4ee5\u4e0a\u7684\u5f55\u97f3\u8bbe\u5907")
+    if clipping_percent >= 0.5 or peak >= 0.995:
+        issues.append("\u51fa\u73b0\u524a\u6ce2/\u7206\u97f3\uff0c\u53ef\u80fd\u662f\u9ea6\u514b\u98ce\u589e\u76ca\u8fc7\u9ad8\u6216\u79bb\u5634\u592a\u8fd1")
+        tips.append("\u628a\u624b\u673a\u6216\u9ea6\u514b\u98ce\u79bb\u5634 15-25 cm\uff0c\u4e0d\u8981\u5bf9\u7740\u6536\u97f3\u5b54\u76f4\u5439")
+    if hnr is not None and hnr < 10:
+        issues.append("\u80cc\u666f\u566a\u58f0\u6216\u58f0\u95e8\u6742\u8d28\u504f\u660e\u663e")
+        tips.append("\u6362\u5230\u66f4\u5b89\u9759\u7684\u623f\u95f4\uff0c\u5173\u6389\u98ce\u6247\u3001\u7a7a\u8c03\u6216\u7535\u8111\u98ce\u6247")
+    if rms_dbfs < -38:
+        issues.append("\u5f55\u97f3\u97f3\u91cf\u504f\u5c0f\uff0c\u7ec6\u8282\u53ef\u80fd\u88ab\u5e95\u566a\u76d6\u4f4f")
+        tips.append("\u9760\u8fd1\u4e00\u70b9\u6216\u63d0\u9ad8\u8f93\u5165\u589e\u76ca\uff0c\u4f46\u4e0d\u8981\u8ba9\u6ce2\u5f62\u7206\u6389")
+    if not issues:
+        issues.append("\u5f55\u97f3\u6761\u4ef6\u8f83\u7a33\u5b9a\uff0c\u9002\u5408\u505a\u58f0\u7ebf\u5206\u6790")
+        tips.append("\u590d\u6d4b\u65f6\u4fdd\u6301\u540c\u6837\u7684\u8ddd\u79bb\u3001\u623f\u95f4\u548c\u8bf4\u8bdd\u97f3\u91cf")
+
+    return {
+        "recording_score": recording_score,
+        "recording_label": _quality_label(recording_score),
+        "device_score": device_score,
+        "device_label": _quality_label(device_score),
+        "issues": issues,
+        "tips": tips,
+        "metrics": {
+            "duration_sec": duration,
+            "sample_rate_hz": sample_rate,
+            "peak": round(peak, 3),
+            "rms_dbfs": rms_dbfs,
+            "clipping_percent": clipping_percent,
+            "silence_percent": silence_percent,
+            "voiced_ratio": voiced_ratio,
+            "hnr_db": round(hnr, 1) if hnr is not None else None,
+        },
+    }
+
+
 def build_concept_scores(
     pitch_summary: dict[str, int | None],
     formants: dict[str, int | None],
@@ -525,12 +633,12 @@ def analyze_audio_file(file_path: str | Path) -> dict:
     import parselmouth
 
     sound = parselmouth.Sound(str(file_path))
+    duration = sound.get_total_duration()
     pitch = sound.to_pitch()
     pitch_values = pitch.selected_array["frequency"]
     pitch_summary = summarize_pitch(pitch_values)
 
     formant = sound.to_formant_burg()
-    duration = sound.get_total_duration()
     sample_times = np.linspace(duration * 0.2, duration * 0.8, num=9) if duration > 0 else []
     formants: dict[str, int | None] = {}
     for formant_index in range(1, 5):
@@ -551,6 +659,15 @@ def analyze_audio_file(file_path: str | Path) -> dict:
 
     profile = build_voice_profile(pitch_summary=pitch_summary, formants=formants, hnr_db=hnr_db)
     profile["duration_sec"] = round(duration, 2)
+    flat_samples = sound.values.flatten()
+    profile["recording_quality"] = assess_recording_quality(
+        samples=flat_samples,
+        sample_rate_hz=sound.sampling_frequency,
+        duration_sec=duration,
+        hnr_db=hnr_db,
+        voiced_frames=sum(1 for value in pitch_values if value and value > 0),
+        total_frames=len(pitch_values),
+    )
     profile["pitch_series"] = [
         {"time": round(float(time), 3), "hz": _round_or_none(value)}
         for time, value in zip(pitch.xs(), pitch_values)

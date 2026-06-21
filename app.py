@@ -52,6 +52,7 @@ def build_placeholder_profile() -> dict:
             }
         },
         "pitch_series": [],
+        "recording_quality": None,
     }
 
 
@@ -138,6 +139,69 @@ def professional_items(profile: dict) -> list[tuple[str, str]]:
     ]
 
 
+def microphone_input(label: str):
+    audio_input = getattr(st, "audio_input", None)
+    if audio_input:
+        return audio_input(label, sample_rate=44100, key="recorded_audio")
+
+    experimental_audio_input = getattr(st, "experimental_audio_input", None)
+    if experimental_audio_input:
+        return experimental_audio_input(label, key="recorded_audio")
+
+    st.info("当前 Streamlit 版本暂不支持网页录音，请先用上传音频。")
+    return None
+
+
+def quality_cards(profile: dict, has_audio: bool) -> str:
+    quality = profile.get("recording_quality") if has_audio else None
+    if not quality:
+        recording_score = "--"
+        device_score = "--"
+        recording_label = "待录制"
+        device_label = "待评估"
+        issues = ["录音或上传后生成录音质量与设备质量评估。"]
+        tips = ["建议 10-30 秒，安静环境，手机或麦克风离嘴 15-25 cm。"]
+        metrics = {}
+    else:
+        recording_score = quality["recording_score"]
+        device_score = quality["device_score"]
+        recording_label = quality["recording_label"]
+        device_label = quality["device_label"]
+        issues = quality["issues"]
+        tips = quality["tips"]
+        metrics = quality["metrics"]
+
+    issue_items = "".join(f"<li>{item}</li>" for item in issues[:3])
+    tip_items = "".join(f"<li>{item}</li>" for item in tips[:3])
+    metrics_text = " · ".join(
+        item
+        for item in [
+            f"{metrics.get('duration_sec')} 秒" if metrics.get("duration_sec") else "",
+            f"{metrics.get('sample_rate_hz')} Hz" if metrics.get("sample_rate_hz") else "",
+            f"音量 {metrics.get('rms_dbfs')} dBFS" if metrics.get("rms_dbfs") is not None else "",
+            f"削波 {metrics.get('clipping_percent')}%" if metrics.get("clipping_percent") is not None else "",
+        ]
+        if item
+    )
+    metrics_html = f"<div class='quality-metrics'>{metrics_text}</div>" if metrics_text else ""
+
+    return f"""
+    <div class="quality-grid">
+      <div class="quality-card">
+        <div class="quality-label">录音质量</div>
+        <div class="quality-score">{recording_score}<span>{recording_label}</span></div>
+        <ul>{issue_items}</ul>
+      </div>
+      <div class="quality-card">
+        <div class="quality-label">设备质量</div>
+        <div class="quality-score">{device_score}<span>{device_label}</span></div>
+        <ul>{tip_items}</ul>
+      </div>
+    </div>
+    {metrics_html}
+    """
+
+
 def secret_or_env(name: str, default: str = "") -> str:
     try:
         value = st.secrets.get(name, "")
@@ -162,7 +226,7 @@ def resolve_ai_config() -> tuple[str, str, str]:
     return LOCAL, "", ""
 
 
-st.set_page_config(page_title="声镜 VoiceScope", layout="wide")
+st.set_page_config(page_title="声镜 VoiceScope", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown(
     """
@@ -213,6 +277,26 @@ st.markdown(
         border-color: #e1d8cf !important;
     }
     .block-container { padding: 1.35rem 1.45rem 2.4rem; max-width: 1480px; }
+    .capture-card {
+        background: rgba(255, 254, 250, .96);
+        border: 1px solid #e7ddd1;
+        border-radius: 12px;
+        padding: 16px 18px 12px;
+        margin-bottom: 14px;
+        box-shadow: 0 12px 26px rgba(35, 30, 24, .05);
+    }
+    .capture-title {
+        font-size: 17px;
+        font-weight: 850;
+        margin-bottom: 2px;
+        color: #202322;
+    }
+    .capture-copy {
+        color: #626a67;
+        font-size: 13px;
+        margin-bottom: 8px;
+        line-height: 1.55;
+    }
     .vs-card {
         background: rgba(255, 254, 250, .94);
         border: 1px solid #e7ddd1;
@@ -292,6 +376,43 @@ st.markdown(
         border-radius: 999px;
         background: linear-gradient(90deg, #8bc7c0, #0e908a);
     }
+    .quality-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+    .quality-card {
+        border: 1px solid #e8ded3;
+        background: linear-gradient(180deg, #fffefd 0%, #faf6ef 100%);
+        border-radius: 10px;
+        padding: 13px 14px;
+    }
+    .quality-label { color: #68706d; font-size: 13px; font-weight: 800; }
+    .quality-score {
+        margin-top: 4px;
+        color: #0e8f89;
+        font-size: 28px;
+        font-weight: 900;
+        line-height: 1.15;
+    }
+    .quality-score span {
+        color: #202322;
+        font-size: 14px;
+        font-weight: 800;
+        margin-left: 8px;
+    }
+    .quality-card ul {
+        margin: 9px 0 0 18px;
+        padding: 0;
+        color: #59615f;
+        font-size: 13px;
+        line-height: 1.55;
+    }
+    .quality-metrics {
+        color: #776f65;
+        font-size: 12px;
+        margin-top: 8px;
+    }
     .param-grid {
         display: grid; grid-template-columns: repeat(11, minmax(92px, 1fr));
         border: 1px solid #e7ded3; border-radius: 10px; overflow: hidden; background: #fffdf8;
@@ -311,47 +432,69 @@ st.markdown(
         .age-card { grid-column: 1 / -1; }
         .headline { font-size: 26px; }
         .score-grid { grid-template-columns: 1fr; }
+        .quality-grid { grid-template-columns: 1fr; }
         .param-grid { grid-template-columns: repeat(4, minmax(112px, 1fr)); }
     }
     @media (max-width: 560px) {
-        .block-container { padding: 1rem .85rem 2rem; }
+        .block-container { padding: 2.15rem .58rem 1.6rem; }
+        section[data-testid="stSidebar"] {
+            min-width: min(88vw, 360px) !important;
+            width: min(88vw, 360px) !important;
+        }
+        .capture-card, .vs-card { border-radius: 10px; padding: 14px; }
         .overview { grid-template-columns: 1fr; gap: 14px; }
         .sound-icon { width: 64px; height: 64px; font-size: 28px; }
-        .headline { font-size: 24px; }
+        .headline { font-size: 22px; overflow-wrap: anywhere; }
         .overview-copy { font-size: 14px; line-height: 1.65; }
-        .chip { margin-top: 10px; }
+        .chip { margin: 9px 5px 0 0; padding: 6px 11px; font-size: 13px; }
+        .age-main { font-size: 22px; }
+        .quality-score { font-size: 24px; }
         .param-grid { grid-template-columns: repeat(2, minmax(112px, 1fr)); }
+        [data-testid="stHorizontalBlock"] { gap: .65rem; }
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-with st.sidebar:
-    st.header("声镜")
-    st.caption("VoiceScope")
-    st.divider()
-    uploaded = st.file_uploader("上传音频", type=["wav", "flac", "aiff", "aif"])
-    user_goal = st.text_area("目标声线", placeholder="例如：更自然女声、更清亮、更轻薄、更适合配音...", height=96)
+st.markdown(
+    """
+    <div class="capture-card">
+      <div class="capture-title">录音或上传音频</div>
+      <div class="capture-copy">手机端优先用“录音”，电脑端也可以上传 wav/flac/aiff/aif。完成后会自动分析声线、设备质量和录音质量。</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+record_tab, upload_tab = st.tabs(["直接录音", "上传文件"])
+with record_tab:
+    recorded = microphone_input("点击录音，建议 10-30 秒")
+with upload_tab:
+    uploaded = st.file_uploader("上传音频", type=["wav", "flac", "aiff", "aif"], key="uploaded_audio")
+
+with st.expander("分析设置", expanded=False):
+    user_goal = st.text_area("目标声线", placeholder="例如：更自然女声、更清亮、更轻薄、更适合配音...", height=88)
     analysis_context = st.selectbox(
         "分析语境",
         ["日常对话（安静环境）", "女声/女性用户", "男声/男性用户", "中性声线", "MTF声音训练", "FTM声音训练", "配音/角色声线"],
         index=0,
     )
     provider, api_key, model = resolve_ai_config()
-    st.caption("AI 报告由后台配置；未配置云端 Key 时自动使用本地规则。")
-    st.divider()
-    st.button("开始分析", use_container_width=True, disabled=uploaded is None)
-    st.caption("建议 10-30 秒，安静环境，正常说话或朗读同一段文本。")
+    st.caption("AI 报告由后台配置；未配置云端 Key 时自动使用本地规则。建议 10-30 秒，安静环境，正常说话或朗读同一段文本。")
 
-has_audio = uploaded is not None
+audio_input = recorded or uploaded
+audio_name = getattr(audio_input, "name", "recorded-audio.wav") if audio_input is not None else ""
+audio_suffix = ".wav"
+if uploaded is not None and "." in uploaded.name:
+    audio_suffix = "." + uploaded.name.rsplit(".", 1)[-1].lower()
+
+has_audio = audio_input is not None
 profile = build_placeholder_profile()
 analysis_error = None
 
 if has_audio:
-    suffix = "." + uploaded.name.rsplit(".", 1)[-1].lower()
     try:
-        profile = analyze_uploaded_bytes(uploaded.getvalue(), suffix=suffix)
+        profile = analyze_uploaded_bytes(audio_input.getvalue(), suffix=audio_suffix)
     except Exception as exc:
         analysis_error = exc
         has_audio = False
@@ -383,6 +526,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+with st.container(border=True):
+    st.markdown("<div class='section-title'>录音设备与录音质量</div>", unsafe_allow_html=True)
+    st.markdown(quality_cards(profile, has_audio), unsafe_allow_html=True)
+
+st.markdown("<div class='spacer'></div>", unsafe_allow_html=True)
 left, right = st.columns([0.95, 1.65])
 
 with left:
@@ -457,7 +605,7 @@ for col, text in zip(quick_cols, quick_questions):
 
 report_goal = f"分析语境：{analysis_context}\n目标声线：{user_goal}"
 if has_audio:
-    report_key = f"report::{uploaded.name}::{provider}::{model}::{report_goal}"
+    report_key = f"report::{audio_name}::{provider}::{model}::{report_goal}"
     if st.session_state.get("report_key") != report_key:
         try:
             report, report_source = generate_ai_report(profile, report_goal, provider, api_key, model)

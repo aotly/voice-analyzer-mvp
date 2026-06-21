@@ -13,6 +13,7 @@ from voice_core import (
     classify_pitch_feel,
     estimate_formant_spacing,
     make_voice_identity,
+    assess_recording_quality,
     summarize_pitch,
     VOICE_DIMENSIONS,
 )
@@ -160,3 +161,40 @@ def test_voice_dimensions_have_circle_terms_and_explanations():
         assert detail["circle_terms"]
         assert detail["evaluates"]
         assert detail["score_meaning"]
+
+
+def test_assess_recording_quality_rewards_clear_speech_sample():
+    samples = [0.0, 0.08, -0.09, 0.12, -0.11, 0.06] * 8000
+
+    quality = assess_recording_quality(
+        samples=samples,
+        sample_rate_hz=44100,
+        duration_sec=12.0,
+        hnr_db=19,
+        voiced_frames=120,
+        total_frames=150,
+    )
+
+    assert quality["recording_score"] >= 75
+    assert quality["device_score"] >= 75
+    assert quality["recording_label"] in {"良好", "优秀"}
+    assert quality["device_label"] in {"良好", "优秀"}
+    assert quality["metrics"]["duration_sec"] == 12.0
+
+
+def test_assess_recording_quality_flags_clipping_and_short_duration():
+    samples = [0.0, 0.99, -1.0, 0.0] * 3000
+
+    quality = assess_recording_quality(
+        samples=samples,
+        sample_rate_hz=8000,
+        duration_sec=2.0,
+        hnr_db=6,
+        voiced_frames=5,
+        total_frames=60,
+    )
+
+    assert quality["recording_score"] < 55
+    assert quality["device_score"] < 60
+    assert any("爆音" in item or "削波" in item for item in quality["issues"])
+    assert any("8 kHz" in item for item in quality["tips"])
