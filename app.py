@@ -462,6 +462,7 @@ st.markdown(
     <div class="capture-card">
       <div class="capture-title">录音或上传音频</div>
       <div class="capture-copy">手机端优先用“录音”，电脑端也可以上传 wav/flac/aiff/aif。完成后会自动分析声线、设备质量和录音质量。</div>
+      <div class="tiny-note">云端版本：2026-06-21-2</div>
     </div>
     """,
     unsafe_allow_html=True,
